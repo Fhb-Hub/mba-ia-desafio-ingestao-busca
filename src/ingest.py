@@ -9,9 +9,10 @@ from langchain_postgres import PGVector
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL")
 PDF_PATH = os.getenv("PDF_PATH")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME")
-PGVECTOR_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not GOOGLE_API_KEY:
     raise ValueError("A variável de ambiente GOOGLE_API_KEY não foi configurada.")
@@ -25,10 +26,12 @@ def ingest_pdf():
     documents = _load_documents(PDF_PATH)
     chunks = _split_documents_into_chunks(documents)
     enriched_chunks = _enrich_chunks(chunks)
-    ids = _generate_chunk_ids(enriched_chunks)
-    embeddings = _initialize_embeddings_model(GOOGLE_API_KEY)
+    ids = _generate_chunks_ids(enriched_chunks)
+    embeddings = _initialize_embeddings_model()
     _add_documents_to_vector_store(
-        enriched_chunks, ids, embeddings, COLLECTION_NAME, PGVECTOR_URL
+        enriched_chunks,
+        ids,
+        embeddings,
     )
 
 
@@ -46,47 +49,53 @@ def _split_documents_into_chunks(documents: list[Document]) -> list[Document]:
     print(f"O documento foi dividido em {len(chunks)} chunks.")
     return chunks
 
+
 def _enrich_document(doc: Document) -> Document:
     return Document(
         page_content=doc.page_content,
         metadata={k: v for k, v in doc.metadata.items() if v not in ("", None)},
     )
 
+
 def _enrich_chunks(chunks: list[Document]) -> list[Document]:
     return [_enrich_document(doc) for doc in chunks]
 
-def _generate_chunk_ids(chunks: list[Document]) -> list[str]:
+
+def _generate_chunks_ids(chunks: list[Document]) -> list[str]:
     return [f"doc-{i}" for i in range(len(chunks))]
 
-def _initialize_embeddings_model(api_key: str) -> GoogleGenerativeAIEmbeddings:
+
+def _initialize_embeddings_model() -> GoogleGenerativeAIEmbeddings:
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001",
-        google_api_key=api_key,
+        model=GOOGLE_EMBEDDING_MODEL,
+        google_api_key=GOOGLE_API_KEY,
     )
     print("Modelo de embeddings do Google inicializado.")
     return embeddings
+
 
 def _add_documents_to_vector_store(
     chunks: list[Document],
     ids: list[str],
     embeddings,
-    collection_name: str,
-    db_url: str,
 ):
-    print(db_url)
-    print(f"Iniciando a inserção dos vetores na coleção '{collection_name}'...")
+    print(f"Iniciando a inserção dos vetores na coleção '{COLLECTION_NAME}'...")
     try:
-        store = PGVector(
-            embeddings=embeddings,
-            collection_name=collection_name,
-            connection=db_url,
-            use_jsonb=True,
-        )
+        store = _initialize_vector_store(embeddings)
         store.add_documents(documents=chunks, ids=ids)
-        print("\nIngestão concluída com sucesso!")
+        print("Ingestão concluída com sucesso!")
         print(f"{len(chunks)} chunks foram vetorizados e armazenados no PostgreSQL.")
     except Exception as e:
         print(f"Ocorreu um erro durante a ingestão: {e}")
+
+
+def _initialize_vector_store(embeddings: GoogleGenerativeAIEmbeddings) -> PGVector:
+    return PGVector(
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        connection=DATABASE_URL,
+        use_jsonb=True,
+    )
 
 
 if __name__ == "__main__":
